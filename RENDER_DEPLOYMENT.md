@@ -20,15 +20,20 @@ Do **not** set on the Node service (PHP-side only):
 - `CHAT_SOCKET_INTERNAL_URL` / `CHAT_INTERNAL_URL` — PHP → Node `/internal/emit` and `/internal/presence`
 - Rate limits, edit window, upload limits, poll interval — PHP config
 
-## PHP host configuration (not changed in this audit)
+## PHP host configuration
 
-On the existing PHP server, after a Render URL exists:
+Frontend and PHP emit now default to the live Render relay:
 
-- `CHAT_SOCKET_PUBLIC_URL=https://<render-service>.onrender.com`
-- `CHAT_SOCKET_INTERNAL_URL=https://<render-service>.onrender.com`
-- `CHAT_INTERNAL_SECRET=<identical secret>`
+- `CHAT_SOCKET_PUBLIC_URL=https://nodeapi-3itx.onrender.com`
+- `CHAT_SOCKET_INTERNAL_URL=https://nodeapi-3itx.onrender.com`
+- `CHAT_INTERNAL_SECRET` must be identical on PHP and Render (env / `chat-server/.env` only; never in browser JS)
 
-`assets/dist/js/chat-realtime.js` connects with `window.io(socketUrl, { auth: { token }, transports: ['websocket', 'polling'] })`. It uses the Socket.IO default path `/socket.io/` and upgrades `http://` → `https://` when the PHP page is HTTPS. It never receives `CHAT_INTERNAL_SECRET`.
+Local Node override on the PHP host:
+
+- `CHAT_SOCKET_PUBLIC_URL=http://localhost:3015`
+- `CHAT_SOCKET_INTERNAL_URL=http://127.0.0.1:3015`
+
+`assets/dist/js/chat-realtime.js` prefers `ChatConfig.socketUrl`, then the token `socket_url`, and connects with `window.io(socketUrl, { auth: { token }, transports: ['websocket', 'polling'] })`. It uses the Socket.IO default path `/socket.io/` and upgrades `http://` → `https://` when the PHP page is HTTPS. It never receives `CHAT_INTERNAL_SECRET`.
 
 ## Local development command
 

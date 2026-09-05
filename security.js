@@ -40,28 +40,44 @@ function safeEqualHex(a, b) {
     return crypto.timingSafeEqual(left, right);
 }
 
-function verifySocketToken(token, secret) {
-    if (!secretIsConfigured(secret) || typeof token !== 'string') {
-        return null;
+function inspectSocketToken(token, secret) {
+    if (typeof token !== 'string' || token === '') {
+        return { ok: false, reason: 'token_absent', userId: 0, canMutate: false };
+    }
+    if (!secretIsConfigured(secret)) {
+        return { ok: false, reason: 'secret_unconfigured', userId: 0, canMutate: false };
     }
     const parts = token.split('.');
     if (parts.length !== 4) {
-        return null;
+        return { ok: false, reason: 'token_malformed', userId: 0, canMutate: false };
     }
     const [userId, expires, canMutate, sig] = parts;
     if (!/^\d+$/.test(userId) || !/^\d+$/.test(expires) || (canMutate !== '0' && canMutate !== '1')) {
-        return null;
+        return { ok: false, reason: 'token_malformed', userId: 0, canMutate: false };
     }
     if (parseInt(expires, 10) < Math.floor(Date.now() / 1000)) {
-        return null;
+        return { ok: false, reason: 'token_expired', userId: 0, canMutate: false };
     }
     const payload = `${userId}.${expires}.${canMutate}`;
     if (!safeEqualHex(hmacHex(payload, secret), sig)) {
+        return { ok: false, reason: 'token_invalid', userId: 0, canMutate: false };
+    }
+    return {
+        ok: true,
+        reason: 'ok',
+        userId: parseInt(userId, 10),
+        canMutate: canMutate === '1',
+    };
+}
+
+function verifySocketToken(token, secret) {
+    const inspected = inspectSocketToken(token, secret);
+    if (!inspected.ok) {
         return null;
     }
     return {
-        userId: parseInt(userId, 10),
-        canMutate: canMutate === '1',
+        userId: inspected.userId,
+        canMutate: inspected.canMutate,
     };
 }
 
@@ -179,6 +195,7 @@ function validateEmitBody(body) {
 module.exports = {
     secretIsConfigured,
     secretsMatch,
+    inspectSocketToken,
     verifySocketToken,
     verifyRoomToken,
     authorizeJoin,

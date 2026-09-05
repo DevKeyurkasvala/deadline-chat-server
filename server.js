@@ -57,10 +57,11 @@ function corsOrigin(origin, callback) {
         callback(null, true);
         return;
     }
-    if (CORS_ORIGINS.indexOf(origin) !== -1 || CORS_ORIGINS.indexOf('*') !== -1) {
+    if (CORS_ORIGINS.indexOf(origin) !== -1) {
         callback(null, true);
         return;
     }
+    logSafe('chat_socket', 'origin_rejected', { origin: String(origin).slice(0, 200) });
     callback(new Error('Origin not allowed'));
 }
 
@@ -93,10 +94,15 @@ app.get('/health', (_req, res) => {
 const server = http.createServer(app);
 const io = new Server(server, {
     path: '/socket.io/',
+    transports: ['polling', 'websocket'],
+    allowUpgrades: true,
+    upgradeTimeout: 10000,
+    perMessageDeflate: false,
     cors: { origin: corsOrigin, credentials: true },
     pingInterval: 20000,
     pingTimeout: 20000,
     allowEIO3: true,
+    cookie: false,
 });
 
 function emitPresence(userId, extraRooms) {
@@ -126,13 +132,20 @@ io.use((socket, next) => {
     const token = socket.handshake.auth && socket.handshake.auth.token
         ? socket.handshake.auth.token
         : socket.handshake.query.token;
-    const auth = security.verifySocketToken(String(token || ''), SECRET);
-    if (!auth || auth.userId <= 0) {
+    const inspected = security.inspectSocketToken(String(token || ''), SECRET);
+    const transport = socket.conn && socket.conn.transport ? socket.conn.transport.name : 'unknown';
+    logSafe('chat_socket', 'handshake', {
+        origin: String(socket.handshake.headers.origin || '').slice(0, 200),
+        token: inspected.reason === 'token_absent' ? 'absent' : 'present',
+        transport: transport,
+        auth: inspected.reason,
+    });
+    if (!inspected.ok || inspected.userId <= 0) {
         next(new Error('Unauthorized'));
         return;
     }
-    socket.data.userId = auth.userId;
-    socket.data.canMutate = !!auth.canMutate;
+    socket.data.userId = inspected.userId;
+    socket.data.canMutate = !!inspected.canMutate;
     next();
 });
 
@@ -140,10 +153,24 @@ io.on('connection', (socket) => {
     const userId = socket.data.userId;
     socket.join('user:' + userId);
     const connected = presence.connect(socket.id, userId);
+    const initialTransport = socket.conn && socket.conn.transport ? socket.conn.transport.name : 'unknown';
     logSafe('chat_socket', 'socket_connected', {
+        socket_id: socket.id,
         user_id: userId,
+        transport: initialTransport,
+        origin: String(socket.handshake.headers.origin || '').slice(0, 200),
+        token: 'present',
         socket_count: connected.socketCount,
     });
+    if (socket.conn) {
+        socket.conn.on('upgrade', (transport) => {
+            logSafe('chat_socket', 'transport_upgrade', {
+                socket_id: socket.id,
+                user_id: userId,
+                transport: transport && transport.name ? transport.name : 'unknown',
+            });
+        });
+    }
     if (connected.transition === 'online') {
         logSafe('chat_presence', 'presence_transition', {
             user_id: userId,
@@ -213,10 +240,14 @@ io.on('connection', (socket) => {
         }
     });
 
-    socket.on('disconnect', () => {
+    socket.on('disconnect', (reason) => {
         const left = presence.disconnect(socket.id);
+        const transport = socket.conn && socket.conn.transport ? socket.conn.transport.name : 'unknown';
         logSafe('chat_socket', 'socket_disconnected', {
+            socket_id: socket.id,
             user_id: userId,
+            transport: transport,
+            reason: String(reason || ''),
             socket_count: left.socketCount,
         });
         if (left.transition === 'offline') {
